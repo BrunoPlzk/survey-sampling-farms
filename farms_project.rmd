@@ -1,0 +1,952 @@
+---
+title: "Farms"
+author: "Bruno Pilarczyk & Shuyao Li"
+date: "11/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+graphics.off()
+```
+
+```{r packages, include = FALSE}
+if (require(survey) == FALSE)
+  install.packages("survey")
+library("survey")
+
+if (require(sampling) == FALSE)
+  install.packages("sampling")
+library("sampling")
+
+if (require(ggplot2) == FALSE)
+  install.packages("ggplot2")
+library("ggplot2")
+
+if (require(icarus) == FALSE)
+  install.packages("icarus")
+library("icarus")
+
+if (require(RColorBrewer) == FALSE)
+  install.packages("RColorBrewer")
+library("RColorBrewer")
+
+if (require(Hmisc) == FALSE)
+  install.packages("Hmisc")
+library("Hmisc")
+
+if (require(latex2exp) == FALSE)
+  install.packages("latex2exp")
+library("latex2exp")
+
+if (require(corrplot) == FALSE)
+  install.packages("corrplot")
+library("corrplot")
+```
+
+```{r data importation, include = FALSE}
+#pathname of the rec99htegne.csv file
+my_path = "/Users/brunopilarczyk/Documents/Cours/M2 Stat Eco/S1/Survey Sampling/Farms/farms.csv"
+farms = read.csv(file = my_path, header = T, dec = ".", sep = ",")
+N = nrow(farms)
+n = 80 #sample size
+farms$weights = rep(N/n, N)
+attach(farms) # allows to handle variables easily 
+```
+
+#1 Preliminary analysis
+##1.1 
+```{r init}
+head(farms)
+str(farms)
+
+farms$CODE = paste0(farms$COUNTY,farms$STATE, sep= " ") 
+#there are duplicated county names, we have to use COUNTY and STATE together to identify a place
+sum(ifelse(duplicated(farms$CODE),1,0)) == 0 #no duplicates
+farms = data.frame(farms)
+```
+
+```{r variables for stratification and post-stratification}
+scatter1 = ggplot(farms, aes(x = LARGEF87, y = ACRES92)) + 
+  geom_point() +
+  ggtitle("Scatterplot of ACRES92 on LARGEF87") +
+  theme_light(base_family = "Times")
+scatter1
+
+# LARGEF87 coulbe a relevant variables once transformed into a categorical variable
+
+summary(LARGEF87)
+
+# Let's define clust_L87 as a categorical variable:
+# clust87 = 1 if LARGEF87 =< 8
+# clust87 = 2 if  8 < LARGEF87  =< 27
+# clust87 = 3 if  27 < LARGEF87 =< 69
+# clust87 = 4 if LARGEF87 > 69
+
+quartiles = quantile(farms$LARGEF87, seq(0, 1, .25))
+farms$clust87 = cut(farms$LARGEF87, quartiles, include.lowest = TRUE)
+farms$clust87 = factor(farms$clust87, labels = c(1,2,3,4))
+
+table(farms$clust87)
+attach(farms)
+
+# the other variable for post-stratification will be REGION
+```
+
+
+#1.2
+```{r 2.2}
+T_y = sum(ACRES92); T_y
+V_y = var(ACRES92); V_y
+```
+
+#1.3
+```{r 2.3}
+scatter2 = ggplot(farms, aes(x = ACRES87, y = ACRES92)) + 
+  geom_point() +
+  theme_light(base_family = "Times")
+scatter2
+```
+
+#2 A single sample
+
+##2.1 SRSWOR design
+```{r 3.1}
+set.seed(7)
+
+si.farms = srswor(n,N)
+ech.si = svydesign( id=~CODE, weights = rep(N/n, n),
+  fpc = rep(N,n),
+  data = farms[which(si.farms==1),])
+
+est = svytotal(~ACRES92,ech.si)
+Y_HT_SR = est[1]; Y_HT_SR 
+V_HT_SR = SE(est)^2 ;V_HT_SR 
+CV_HT_SR = SE(est) / Y_HT_SR; CV_HT_SR 
+```
+##2.2 Stratified designs 1 and 2
+
+###2.2.1 Stratified design 1: Allocation proportional to ACRES87
+```{r sample in each clust87}
+# We will use the allocation proportional to ACRES87 (auxiliary variable) and then look at each stratum of clust87
+set.seed(7)
+
+N_clust87 = table(clust87)
+
+ACRES87_sum = tapply(ACRES87, clust87, sum)
+ech.prop87 = round(n*ACRES87_sum/sum(ACRES87_sum))
+ech.prop87[4] = ech.prop87[4] - 1
+ech.prop87
+
+prop87.rec = strata(farms,
+                  "clust87",
+                  size=c(ech.prop87[1],ech.prop87[2],ech.prop87[3],ech.prop87[4]),
+                  method="srswor")
+
+prop87.data = getdata(farms,prop87.rec)
+```
+
+
+```{r stratifying proportionally to an auxiliary variable}
+weight_prop87 = c(rep(N_clust87[1]/ech.prop87[1], ech.prop87[1]),
+                  rep(N_clust87[2]/ech.prop87[2], ech.prop87[2]),
+                  rep(N_clust87[3]/ech.prop87[3], ech.prop87[3]),
+                  rep(N_clust87[4]/ech.prop87[4], ech.prop87[4]))
+
+sample.prop87 = svydesign(id=~CODE, strata = ~clust87, weights = weight_prop87,
+                     fpc = c(rep(ech.prop87[1]/N_clust87[1], ech.prop87[1]),
+                             rep(ech.prop87[2]/N_clust87[2], ech.prop87[2]),
+                             rep(ech.prop87[3]/N_clust87[3], ech.prop87[3]),
+                             rep(ech.prop87[4]/N_clust87[4], ech.prop87[4])),
+                     data = prop87.data)
+
+res_prop87 = svytotal(~ACRES92,sample.prop87)
+
+Y_prop87 = res_prop87[1];Y_prop87
+SD_prop87 = SE(res_prop87);SD_prop87
+V_prop87 = SD_prop87^2;V_prop87
+CV_prop87 = SD_prop87/Y_prop87;CV_prop87
+deff_prop87 = V_prop87/V_HT_SR;deff_prop87
+```
+
+###2.2.2 Stratified design 2: Neyman allocation
+
+```{r defining the sample strata}
+set.seed(7)
+sd_87 = tapply(ACRES92, clust87, sd)
+
+N_sd_87 = numeric(4)
+for (i in 1:4){
+  N_sd_87[i] = N_clust87[i] * sd_87[i]
+}
+sum_N_sd_87 = sum(N_sd_87)
+
+n_opt = numeric(4)
+for (i in 1:4){
+  n_opt[i] = round(n*(N_clust87[i]*sd_87[i])/(sum_N_sd_87))
+}
+n_opt
+
+neyman.rec = strata(farms,"clust87", size=c(n_opt[1],n_opt[2],n_opt[3],n_opt[4]), method="srswor")
+neyman.data = getdata(farms,neyman.rec)
+```
+
+```{r stratifying with the neyman allocation}
+weight_neyman = c(rep(N_clust87[1]/n_opt[1], n_opt[1]),
+                  rep(N_clust87[2]/n_opt[2], n_opt[2]),
+                  rep(N_clust87[3]/n_opt[3], n_opt[3]),
+                  rep(N_clust87[4]/n_opt[4], n_opt[4]))
+
+sample.neyman = svydesign(id=~CODE, strata = ~clust87, weights = weight_neyman,
+                     fpc = c(rep(n_opt[1]/N_clust87[1], n_opt[1]),
+                             rep(n_opt[2]/N_clust87[2], n_opt[2]),
+                             rep(n_opt[3]/N_clust87[3], n_opt[3]),
+                             rep(n_opt[4]/N_clust87[4], n_opt[4])),
+                     data = neyman.data)
+
+res_neyman = svytotal(~ACRES92,sample.neyman)
+
+Y_neyman = res_neyman[1];Y_neyman
+SD_neyman = SE(res_neyman);SD_neyman
+V_neyman = SD_neyman^2;V_neyman
+CV_neyman = SD_neyman/Y_neyman;CV_neyman
+deff_neyman = V_neyman/V_HT_SR;deff_neyman
+```
+###2.2.3 Stratified design 3: Proportional allocation
+
+```{r defining the sample strat}
+n_prop = round((n/N)*N_clust87)
+sum(n_prop) == n
+n_prop
+
+prop.rec = strata(farms,"clust87",
+                    size=c(n_prop[1],n_prop[2],n_prop[3],n_prop[4]),
+                    method="srswor")
+
+prop.data = getdata(farms,prop.rec)
+```
+
+```{r stratifying with the proportional allocation}
+weight_prop = c(rep(N_clust87[1]/n_prop[1], n_prop[1]),
+                  rep(N_clust87[2]/n_prop[2], n_prop[2]),
+                  rep(N_clust87[3]/n_prop[3], n_prop[3]),
+                  rep(N_clust87[4]/n_prop[4], n_prop[4]))
+
+sample.prop = svydesign(id=~CODE, strata = ~clust87, weights = weight_prop,
+                     fpc = c(rep(n_prop[1]/N_clust87[1], n_prop[1]),
+                             rep(n_prop[2]/N_clust87[2], n_prop[2]),
+                             rep(n_prop[3]/N_clust87[3], n_prop[3]),
+                             rep(n_prop[4]/N_clust87[4], n_prop[4])),
+                     data = prop.data)
+
+res_prop = svytotal(~ACRES92,sample.prop)
+res_prop
+
+Y_prop = res_prop[1];Y_prop
+SD_prop = SE(res_prop);SD_prop
+V_prop = SD_prop^2;V_prop
+CV_prop = SD_prop/Y_prop;CV_prop
+deff_prop = V_prop/V_HT_SR;deff_prop
+```
+
+##2.3 Post-Stratification 1 and 2 : clust87 and REGION
+###Variable 1: clust87
+```{r 2.3 var2}
+set.seed(7)
+N_clust87 = table(clust87)
+ech.post_clust87 = postStratify(ech.si, ~clust87, N_clust87, partial = T)
+est.post_clust87 = svytotal(~ACRES92, ech.post_clust87)
+
+Y_POST_clust87 = est.post_clust87[1];Y_POST_clust87
+V_POST_clust87 = SE(est.post_clust87)^2 ;V_POST_clust87
+CV_POST_clust87 = SE(est.post_clust87) / Y_POST_clust87; CV_POST_clust87
+```
+
+###Variable 2: REGION
+```{r 2.3 var2}
+set.seed(7)
+N_REGION = table(REGION)
+ech.post_REGION = postStratify(ech.si, ~REGION, N_REGION, partial = T)
+est.post_REGION = svytotal(~ACRES92, ech.post_REGION)
+
+Y_POST_REGION = est.post_REGION[1];Y_POST_REGION
+V_POST_REGION = SE(est.post_REGION)^2 ;V_POST_REGION
+CV_POST_REGION = SE(est.post_REGION) / Y_POST_REGION; CV_POST_REGION
+```
+
+##2.4 Ratio estimator
+```{r 2.4 Ratio Estimator}
+set.seed(7)
+est.ratio = svyratio(~ACRES92, ~ACRES87, ech.si)
+res.ratio = predict(est.ratio, total = sum(ACRES87))
+Y_ratio = res.ratio$total;Y_ratio
+SD_ratio = res.ratio$se;SD_ratio
+V_ratio = SD_ratio^2;V_ratio
+CV_ratio = SD_ratio/Y_ratio;CV_ratio
+```
+
+##2.5 Regression estimator
+```{r 2.5 Regression Estimator}
+set.seed(7)
+ech.si.reg = calibrate(ech.si, ~ACRES87, c(N, sum(ACRES92)))
+res.si.reg = svytotal(~ACRES92, ech.si.reg)
+Y_reg = res.si.reg[1];Y_reg
+SD_reg = SE(res.si.reg);SD_reg
+V_reg = SD_reg^2;V_reg
+CV_reg = SD_reg/Y_reg;CV_reg
+```
+
+
+##2.6 Calibration
+
+```{r correlation of ACRES87 and ACRES82 with ACRES92}
+df = farms[c("ACRES92", "ACRES87", "ACRES82",
+             "FARMS92", "FARMS87", "FARMS82", 
+             "LARGEF92", "LARGEF87", "LARGEF82",
+             "SMALLF92","SMALLF87","SMALLF82")]
+
+
+cor(ACRES87, ACRES92)
+cor(ACRES82, ACRES92)
+
+corrplot(cor(df))
+```
+
+```{r 2.6 margin matrix}
+
+mar1 = c("clust87",4,762,740,747,743)
+mar2 = c("ACRES87", 0, sum(farms$ACRES87),0,0,0)
+mar3 = c("ACRES82", 0, sum(farms$ACRES82),0,0,0)
+
+# we don't use state because there are some chances that the sample didn't pick every state
+marginmatrix = rbind(mar1, mar2,mar3)
+marginmatrix
+
+```
+
+```{r 2.6 calibration on SRSWOR design}
+sample = farms[which(si.farms==1),]
+calib1 <- calibration(data = sample ,
+                     marginMatrix = marginmatrix,
+                     colWeights = "weights",
+                     method = "linear",
+                     description = T)
+
+Y_cal1 = weightedTotal(sample$ACRES92, calib1); Y_cal1
+SD_cal1 = sqrt(wtd.var(sample$ACRES92, calib1)); SD_cal1
+V_cal1 = SD_cal1^2;V_cal1
+CV_cal1= SD_cal1/Y_cal1;CV_cal1
+```
+
+
+```{r 2.6 calibration on ST1 design }
+prop87.data$weights = weight_prop87
+calib2 <- calibration(data = prop87.data,
+                     marginMatrix = marginmatrix,
+                     colWeights = "weights",
+                     method = "linear",
+                     description = F)
+
+Y_cal2 = weightedTotal(prop87.data$ACRES92, calib2); Y_cal2
+SD_cal2 = sqrt(wtd.var(prop87.data$ACRES92, calib2)); SD_cal2
+V_cal2 = SD_cal2^2;V_cal2
+CV_cal2= SD_cal2/Y_cal2;CV_cal2
+```
+
+```{r 2.6 calibration on ST2 design }
+neyman.data$weights = weight_neyman
+calib3 <- calibration(data = neyman.data,
+                     marginMatrix = marginmatrix,
+                     colWeights = "weights",
+                     method = "linear",
+                     description = F)
+
+Y_cal3 = weightedTotal(neyman.data$ACRES92, calib3); Y_cal3
+SD_cal3 = sqrt(wtd.var(neyman.data$ACRES92, calib3)); SD_cal3
+V_cal3 = SD_cal3^2;V_cal3
+CV_cal3= SD_cal3/Y_cal3;CV_cal3
+```
+
+```{r 2.6 calibration on ST3 design }
+prop.data$weights = weight_prop
+calib4 <- calibration(data = prop.data,
+                     marginMatrix = marginmatrix,
+                     colWeights = "weights",
+                     method = "linear",
+                     description = F)
+
+Y_cal4 = weightedTotal(prop.data$ACRES92, calib4); Y_cal4
+SD_cal4 = sqrt(wtd.var(prop.data$ACRES92, calib4)); SD_cal4
+V_cal4 = SD_cal4^2;V_cal4
+CV_cal4= SD_cal4/Y_cal4;CV_cal4
+```
+
+
+#3 Simulations
+
+#3.1 SRSWOR design
+
+```{r 2.4.1 (6), echo = FALSE}
+# Initialization
+set.seed(7)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_HT = matrix(1, nsimu, 1)
+var.esti.tu_HT = matrix(1, nsimu, 1)
+
+#Simulations
+for (i in 1:nsimu)
+{
+  srswor.farms = srswor(n, N)
+  design.srswor = svydesign(id=~CODE,
+                     weights = rep(N/n, n),
+                     fpc = rep(N,n),
+                     data = farms[which(srswor.farms==1),])
+ a = svytotal(~ACRES92, design.srswor)
+ tu.esti_HT[i] <- a[1]
+ var.esti.tu_HT[i] <- SE(a)^2
+}
+
+#Monte Carlo: mean and standard deviation
+Y_MC_HT = mean(tu.esti_HT);Y_MC_HT
+V_MC_HT = var(tu.esti_HT);V_MC_HT
+SD_MC_HT = sqrt(var(tu.esti_HT));SD_MC_HT
+CV_MC_HT = SD_MC_HT/Y_MC_HT;CV_MC_HT
+
+#Histogram
+HT = data.frame(values = tu.esti_HT)
+qplot(x = HT$values, fill= ..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = Y_MC_HT,
+             color = "true"),
+             size = 0.5,
+             linetype = "dashed",
+             show.legend = T) +
+  geom_vline(aes(xintercept = T_y,
+             color = "estimate"),
+             size = 0.5,
+             linetype = "dashed",
+             show.legend = T) +
+  xlab("Horvitz Thompson Total estimator") +
+  ylab("Count") +
+  scale_fill_gradient(low="black", high="grey") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_HT) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[italic(y)])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+#3.2 Stratified designs 1 and 2
+
+```{r Stratified design 1: allocation proportional to ACRES87}
+# Initialization
+set.seed(7)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_st = matrix(1, nsimu, 1)
+var.esti.tu_st = matrix(1, nsimu, 1)
+
+
+for (i in 1:nsimu){
+  prop87.rec = strata(farms,
+                    "clust87",
+                    size=c(ech.prop87[1],ech.prop87[2],ech.prop87[3],ech.prop87[4]),
+                    method="srswor")
+  
+  prop87.data = getdata(farms,prop87.rec)
+
+  weight_prop87 = c(rep(N_clust87[1]/ech.prop87[1], ech.prop87[1]),
+                    rep(N_clust87[2]/ech.prop87[2], ech.prop87[2]),
+                    rep(N_clust87[3]/ech.prop87[3], ech.prop87[3]),
+                    rep(N_clust87[4]/ech.prop87[4], ech.prop87[4]))
+
+  sample.prop87 = svydesign(id=~CODE, strata = ~clust87, weights = weight_prop87,
+                       fpc = c(rep(ech.prop87[1]/N_clust87[1], ech.prop87[1]),
+                               rep(ech.prop87[2]/N_clust87[2], ech.prop87[2]),
+                               rep(ech.prop87[3]/N_clust87[3], ech.prop87[3]),
+                               rep(ech.prop87[4]/N_clust87[4], ech.prop87[4])),
+                       data = prop87.data)
+
+  res_prop87 = svytotal(~ACRES92,sample.prop87)
+  tu.esti_st[i] <- res_prop87[1]
+  var.esti.tu_st[i] <- SE(res_prop87)^2
+}
+
+#Monte Carlo: mean and standard deviation
+Y_MC_st1 = mean(tu.esti_st);Y_MC_st1
+V_MC_st1 = var(tu.esti_st);V_MC_st1
+SD_MC_st1 = sqrt(var(tu.esti_st));SD_MC_st1
+CV_MC_st1 = SD_MC_st1/Y_MC_st1;CV_MC_st1
+
+#Histogram
+st1 = data.frame(values = tu.esti_st)
+qplot(x = st1$values, fill= ..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_st1, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Horvitz Thompson Total estimator") +
+  ylab("Count") +
+  scale_fill_gradient(low="black", high="lightcoral") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_st1) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[italic(y)])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+```{r Stratified design 2: Neyman allocation}
+# Initialization
+set.seed(7)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_st = matrix(1, nsimu, 1)
+var.esti.tu_st = matrix(1, nsimu, 1)
+
+
+for (i in 1:nsimu){
+  neyman.rec = strata(farms,
+                    "clust87",
+                    size=c(n_opt[1],n_opt[2],n_opt[3],n_opt[4]),
+                    method="srswor")
+  
+  neyman.data = getdata(farms,neyman.rec)
+
+  weight_neyman = c(rep(N_clust87[1]/n_opt[1], n_opt[1]),
+                    rep(N_clust87[2]/n_opt[2], n_opt[2]),
+                    rep(N_clust87[3]/n_opt[3], n_opt[3]),
+                    rep(N_clust87[4]/n_opt[4], n_opt[4]))
+
+  sample.neyman = svydesign(id=~CODE, strata = ~clust87, weights = weight_neyman,
+                       fpc = c(rep(n_opt[1]/N_clust87[1], n_opt[1]),
+                               rep(n_opt[2]/N_clust87[2], n_opt[2]),
+                               rep(n_opt[3]/N_clust87[3], n_opt[3]),
+                               rep(n_opt[4]/N_clust87[4], n_opt[4])),
+                       data = neyman.data)
+
+  res_neyman = svytotal(~ACRES92,sample.neyman)
+  tu.esti_st[i] <- res_neyman[1]
+  var.esti.tu_st[i] <- SE(res_neyman)^2
+}
+
+#Monte Carlo: mean and standard deviation
+Y_MC_st2 = mean(tu.esti_st);Y_MC_st2
+V_MC_st2 = var(tu.esti_st);V_MC_st2
+SD_MC_st2 = sqrt(var(tu.esti_st));SD_MC_st2
+CV_MC_st2 = SD_MC_st1/Y_MC_st1;CV_MC_st2
+
+#Histogram
+st2 = data.frame(values = tu.esti_st)
+qplot(x = st2$values, fill= ..count.., geom = "histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_st2, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Horvitz Thompson Total estimator") +
+  ylab("Count") +
+  scale_fill_gradient(low = "black", high = "sienna4") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_st2) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[italic(y)])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+```{r Stratified design 3: Proportional allocation}
+# Initialization
+set.seed(7)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_st = matrix(1, nsimu, 1)
+var.esti.tu_st = matrix(1, nsimu, 1)
+
+
+for (i in 1:nsimu){
+  prop.rec = strata(farms,
+                    "clust87",
+                    size=c(n_prop[1],n_prop[2],n_prop[3],n_prop[4]),
+                    method="srswor")
+  
+  prop.data = getdata(farms,prop.rec)
+
+  weight_prop = c(rep(N_clust87[1]/n_prop[1], n_prop[1]),
+                    rep(N_clust87[2]/n_prop[2], n_prop[2]),
+                    rep(N_clust87[3]/n_prop[3], n_prop[3]),
+                    rep(N_clust87[4]/n_prop[4], n_prop[4]))
+
+  sample.prop = svydesign(id=~CODE, strata = ~clust87, weights = weight_prop,
+                       fpc = c(rep(n_prop[1]/N_clust87[1], n_prop[1]),
+                               rep(n_prop[2]/N_clust87[2], n_prop[2]),
+                               rep(n_prop[3]/N_clust87[3], n_prop[3]),
+                               rep(n_prop[4]/N_clust87[4], n_prop[4])),
+                       data = prop.data)
+
+  res_prop = svytotal(~ACRES92,sample.prop)
+  tu.esti_st[i] <- res_prop[1]
+  var.esti.tu_st[i] <- SE(res_prop)^2
+}
+
+#Monte Carlo: mean and standard deviation
+Y_MC_st3 = mean(tu.esti_st);Y_MC_st3
+V_MC_st3 = var(tu.esti_st);V_MC_st3
+SD_MC_st3 = sqrt(var(tu.esti_st));SD_MC_st3
+CV_MC_st3 = SD_MC_st3/Y_MC_st3;CV_MC_st3
+
+#Histogram
+st3 = data.frame(values = tu.esti_st)
+qplot(x = st3$values, fill= ..count.., geom = "histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_st3, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Horvitz Thompson Total estimator") +
+  ylab("Count") +
+  scale_fill_gradient(low = "black", high = "khaki2") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_st3) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[italic(y)])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12))
+```
+
+
+#3.3 Post-stratification 1 and 2
+```{r PS 1}
+# Initialization
+set.seed(7)
+N_post = table(clust87  = farms$clust87)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_post = matrix(1, nsimu, 1)
+var.esti.tu_post = matrix(1, nsimu, 1)
+
+#Simulations
+for (i in 1:nsimu){
+  srswor.farms = srswor(n,N)
+  design.srswor = svydesign(id = ~CODE, weight = rep(N/n, n),
+                        fpc = rep(N, n), data = farms[which(srswor.farms == 1),])
+  design.post = postStratify(design.srswor, ~clust87, N_post, partial = TRUE)
+  # we use partial = TRUE because in some cases post-strat may be empty
+  res.post = svytotal(~ACRES92, design = design.post) 
+  tu.esti_post[i] <- res.post[1]
+  var.esti.tu_post[i] <- res.post[2]
+}
+
+#Monte Carlo: mean and standard deviation
+Y_MC_post1 = mean(tu.esti_post);Y_MC_post1
+V_MC_post1 = var(tu.esti_post);V_MC_post1
+SD_MC_post1 = sqrt(var(tu.esti_post));SD_MC_post1
+CV_MC_post1 = SD_MC_post1/Y_MC_post1;CV_MC_post1
+err_post1 = abs((Y_MC_post1 - T_y)/T_y);print(paste(round(err_post1*100, 3),"%"))
+
+#Histogram
+post1 = data.frame(values = tu.esti_post)
+qplot(x = post1$values, fill=..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_post1, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Post Stratified Total estimator 1 (using clust87)") +
+  ylab("Count") +
+  scale_fill_gradient(low="black", high="royalblue2") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_post1) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[post])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+```{r PS2}
+# Initialization
+set.seed(7)
+N_post <- table(REGION  = farms$REGION)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_post = matrix(1, nsimu, 1)
+var.esti.tu_post = matrix(1, nsimu, 1)
+
+#Simulations
+for (i in 1:nsimu){
+  srswor.farms = srswor(n,N)
+  design.srswor = svydesign(id = ~CODE, weight = rep(N/n, n),
+                        fpc = rep(N, n), data = farms[which(srswor.farms == 1),])
+  design.post = postStratify(design.srswor, ~REGION, N_post, partial = TRUE)
+  # we use partial = TRUE because in some cases post-strat may be empty
+  res.post = svytotal(~ACRES92, design = design.post) 
+  tu.esti_post[i] <- res.post[1]
+  var.esti.tu_post[i] <- res.post[2]
+}
+
+#Monte Carlo: mean and standard deviation
+Y_MC_post2 = mean(tu.esti_post);Y_MC_post2
+V_MC_post2 = var(tu.esti_post);V_MC_post2
+SD_MC_post2 = sqrt(var(tu.esti_post));SD_MC_post2
+CV_MC_post2 = SD_MC_post2/Y_MC_post2;CV_MC_post2
+err_post2 = abs((Y_MC_post2 - T_y)/T_y);print(paste(round(err_post2*100, 3),"%"))
+
+#Histogram
+post2 = data.frame(values = tu.esti_post)
+qplot(x = post2$values, fill=..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_post2, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Post Stratified Total estimator 2 (using REGION)") +
+  ylab("Count") +
+  scale_fill_gradient(low="black", high="gold1") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_post2) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[post])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+
+```{r Ratio}
+set.seed(7)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_ratio = matrix(1, nsimu, 1)
+var.esti.tu_ratio = matrix(1, nsimu, 1)
+
+for (i in 1:nsimu){
+  srswor.farms = srswor(n,N)
+  design.srswor = svydesign(id = ~CODE, weight = rep(N/n, n),
+                        fpc = rep(N, n), data = farms[which(srswor.farms == 1),])
+  est.ratio = svyratio(~ACRES92, ~ACRES87, design.srswor)
+  res.ratio = predict(est.ratio, total = sum(ACRES87))
+
+  tu.esti_ratio[i] <- res.ratio[[1]]
+  var.esti.tu_ratio[i] <- res.ratio[[2]]
+}
+
+Y_MC_ratio = mean(tu.esti_ratio);Y_MC_ratio
+V_MC_ratio = var(tu.esti_ratio);V_MC_ratio
+SD_MC_ratio = sqrt(V_MC_ratio);SD_MC_ratio
+CV_MC_ratio = SD_MC_ratio/Y_MC_ratio;CV_MC_ratio
+err_ratio = abs((Y_MC_ratio - T_y)/T_y);print(paste(round(err_ratio*100, 3),"%"))
+
+#Histogram
+ratio = data.frame(values = tu.esti_ratio)
+qplot(x = ratio$values, fill=..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_ratio, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Ratio Total estimator") +
+  scale_fill_gradient(low="black", high="limegreen") +
+  ylab("Count") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_ratio) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[rat])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+```{r Regression}
+set.seed(7)
+nsimu = 1000
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_reg = matrix(1, nsimu, 1)
+var.esti.tu_reg = matrix(1, nsimu, 1)
+
+for (i in 1:nsimu){
+  srswor.farms = srswor(n,N)
+  design.srswor = svydesign(id = ~CODE, weight = rep(N/n, n),
+                        fpc = rep(N, n), data = farms[which(srswor.farms == 1),])
+  est.reg = calibrate(design.srswor, ~ACRES87, c(N, sum(ACRES87)))
+  res.reg = svytotal(~ACRES92, est.reg)
+
+  tu.esti_reg[i] <- res.reg[1]
+  var.esti.tu_reg[i] <- res.reg[2]
+}
+
+Y_MC_reg = mean(tu.esti_reg);Y_MC_reg
+V_MC_reg = var(tu.esti_reg);V_MC_reg
+SD_MC_reg = sqrt(V_MC_reg);SD_MC_reg
+CV_MC_reg = SD_MC_reg/Y_MC_reg;CV_MC_reg
+err_reg = abs((Y_MC_reg - T_y)/T_y);print(paste(round(err_reg*100, 3),"%"))
+
+#Histogram
+reg = data.frame(values = tu.esti_reg)
+qplot(x = reg$values, fill=..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_reg, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Regression Total estimator") +
+  ylab("Count") +
+  scale_fill_gradient(low="black", high="red") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_reg) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[reg])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12))
+```
+
+
+```{r Calibration}
+set.seed(7)
+nsimu = 1000
+
+mar1 = c("clust87",4,762,740,747,743)
+mar2 = c("ACRES87", 0, sum(farms$ACRES87),0,0,0)
+mar3 = c("ACRES82", 0, sum(farms$ACRES82),0,0,0)
+
+# we don't use state because there are some chances that the sample didn't pick every state
+marginmatrix = rbind(mar1, mar2,mar3)
+marginmatrix
+
+
+nb.simul = matrix(1:nsimu, nsimu, 1)
+tu.esti_cal = matrix(1, nsimu, 1)
+var.esti.tu_cal = matrix(1, nsimu, 1)
+
+for (i in 1:nsimu){
+  srswor.farms = srswor(n, N)
+  sample = farms[which(srswor.farms==1),]
+  calib <- calibration(data = sample ,
+                     marginMatrix = marginmatrix,
+                     colWeights = "weights",
+                     method = "linear",
+                     description = FALSE)
+  
+  res.cal = weightedTotal(sample$ACRES92, calib)
+  tu.esti_cal[i] <- res.cal[1]
+  }
+
+Y_MC_cal = mean(tu.esti_cal);Y_MC_cal
+V_MC_cal = var(tu.esti_cal);V_MC_cal
+SD_MC_cal = sqrt(V_MC_cal);SD_MC_cal
+CV_MC_cal = SD_MC_cal/Y_MC_cal;CV_MC_cal
+err_cal = abs((Y_MC_cal - T_y)/T_y);print(paste(round(err_cal*100, 3),"%"))
+
+#Histogram
+cal = data.frame(values = tu.esti_cal)
+qplot(x = cal$values, fill=..count.., geom="histogram", bins = 20) +
+  geom_vline(aes(xintercept = T_y, color = "black"), size = 0.5, linetype = "dashed") +
+  geom_vline(aes(xintercept = Y_MC_cal, color = "purple"), size = 0.5, linetype = "dashed") +
+  xlab("Calibrated Total estimator") +
+  ylab("Count") +
+  scale_fill_gradient(low="black", high="cyan") +
+  scale_x_continuous(breaks=c(T_y, Y_MC_cal) ,labels=c(" "," ")) +
+  scale_color_manual(name = "Statistic",
+                     labels=c(expression(italic(t)[italic(y)]),
+                              expression(hat(italic(t))[cal])),
+                     values=c("black", "magenta")) +
+  theme_light(base_family = "Times") +
+  theme(legend.text = element_text(size = 12),
+        legend.title = element_text(size = 12)) 
+```
+
+```{r design comparison}
+all = rbind(HT, st1, st2, st3)
+all = data.frame(all, Design = c(rep("SRSWOR", nsimu),
+                                    rep("ST1", nsimu),
+                                    rep("ST2", nsimu),
+                                    rep("ST3", nsimu)))
+
+comparison = ggplot(all) +
+   aes(x = values, fill = Design) +
+   xlab("Total estimator value") +
+   ylab("Density") +
+   geom_density(aes(y = ..count..), alpha = 0.5) +
+   geom_vline(aes(xintercept = T_y), color = "black", size = 0.5, linetype = "dashed") + 
+   scale_fill_manual(values = c("grey","lightcoral", "sienna4", "khaki2")) +
+   scale_x_continuous(breaks=c(T_y), labels=c(TeX("$t_y$"))) +
+   theme_light(base_family = "Times")
+comparison
+```
+
+```{r design effect}
+deff_st_prop87 = V_MC_st1/V_MC_HT
+deff_st_neyman = V_MC_st2/V_MC_HT
+deff_prop = V_MC_st3/V_MC_HT
+deff_st_prop87;deff_st_neyman;deff_prop
+```
+
+
+```{r estimator comparison1}
+all = rbind(post1, post2)
+all = data.frame(all, Estimator = c(rep("PS1 (clust87)", nsimu),
+                                    rep("PS2 (REGION)", nsimu)))
+
+comparison = ggplot(all) +
+   aes(x = values, fill = Estimator) +
+   xlab("Total estimator value") +
+   ylab("Density") +
+   geom_density(aes(y = ..count..), alpha = 0.5) +
+   geom_vline(aes(xintercept = T_y), color = "black", size = 0.5, linetype = "dashed") + 
+   scale_fill_manual(values = c("royalblue2","gold1")) +
+   scale_x_continuous(breaks=c(T_y), labels=c(TeX("$t_y$"))) +
+   theme_light(base_family = "Times")
+comparison
+```
+
+```{r estimator comparison2}
+all = rbind(ratio, reg, cal)
+all = data.frame(all, Estimator = c(rep("Ratio", nsimu),
+                                    rep("Regression", nsimu),
+                                    rep("Calibrated", nsimu)))
+
+comparison = ggplot(all) +
+   aes(x = values, fill = Estimator) +
+   xlab("Total estimator value") +
+   ylab("Density") +
+   geom_density(aes(y = ..count..), alpha = 0.5) +
+   geom_vline(aes(xintercept = T_y), color = "black", size = 0.6, linetype = "dashed") + 
+   scale_fill_manual(values = c("cyan", "limegreen", "red")) +
+   scale_x_continuous(breaks=c(T_y), labels=c(TeX("$t_y$"))) +
+   theme_light(base_family = "Times")
+comparison
+```
+
+```{r estimator comparison 3}
+all = rbind(post1, post2, ratio)
+all = data.frame(all, Estimator = c(rep("PS1 (clust87)", nsimu),
+                                    rep("PS2 (REGION)", nsimu),
+                                    rep("Ratio", nsimu)))
+
+comparison = ggplot(all) +
+   aes(x = values, fill = Estimator) +
+   xlab("Total estimator value") +
+   ylab("Density") +
+   geom_density(aes(y = ..count..), alpha = 0.6) +
+   geom_vline(aes(xintercept = T_y), color = "black", size = 0.5, linetype = "dashed") + 
+   scale_fill_manual(values = c("royalblue2","gold1", "limegreen")) +
+   scale_x_continuous(breaks=c(T_y), labels=c(TeX("$t_y$"))) +
+   theme_light(base_family = "Times")
+comparison
+```
+
+```{r error and CV comparison}
+err_post1
+err_post2
+err_ratio
+err_reg
+err_cal
+
+CV_MC_post1
+CV_MC_post2
+CV_MC_ratio
+CV_MC_reg
+CV_MC_cal
+
+#Ratio estimator is the best in terms of accuracy and significance
+```
+
